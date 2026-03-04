@@ -49,6 +49,15 @@ public static class FixParser
         {
             switch (msg.MsgType)
             {
+                case "0": // Heartbeat
+                    msg.Type = FixMessageType.Heartbeat;
+                    break;
+                case "2": // ResendRequest
+                    msg.Type = FixMessageType.ResendRequest;
+                    break;
+                case "4": // Sequence Reset
+                    msg.Type = FixMessageType.ResetSequence;
+                    break;
                 case "D": // NewOrderSingle
                     msg.Type = FixMessageType.OrderInsert;
                     break;
@@ -90,6 +99,14 @@ public static class FixParser
             return null;
         }
 
+        long? GetLong(string tag)
+        {
+            var s = Get(tag);
+            if (string.IsNullOrEmpty(s)) return null;
+            if (long.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var l)) return l;
+            return null;
+        }
+
         switch (msg.Type)
         {
             case FixMessageType.OrderInsert:
@@ -127,6 +144,26 @@ public static class FixParser
                     LeavesQty = GetDecimal("151"),
                     CumQty = GetDecimal("14"),
                     AvgPx = GetDecimal("6"),
+                    Fields = msg.Fields
+                };
+            case FixMessageType.ResetSequence:
+                return new ResetSequenceMessage
+                {
+                    NewSeqNo = GetLong("36"),
+                    GapFillFlag = Get("123"),
+                    Fields = msg.Fields
+                };
+            case FixMessageType.ResendRequest:
+                return new ResendRequestMessage
+                {
+                    BeginSeqNo = GetLong("7"),
+                    EndSeqNo = GetLong("16"),
+                    Fields = msg.Fields
+                };
+            case FixMessageType.Heartbeat:
+                return new HeartbeatMessage
+                {
+                    TestReqID = Get("112"),
                     Fields = msg.Fields
                 };
             default:
