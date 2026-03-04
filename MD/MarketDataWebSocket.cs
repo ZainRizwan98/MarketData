@@ -1,14 +1,15 @@
+using MarketData.Domain;
+using MarketData.Infrastructure;
+using MarketData.Parsing;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using System;
 using System.IO;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using MarketData.Parsing;
-using MarketData.Domain;
-using MarketData.Infrastructure;
 
 namespace MarketData.Infrastructure;
 
@@ -98,7 +99,7 @@ public static class MarketDataWebSocket
                     if (deserialized is OrderInsertMessage or OrderDeleteMessage or OrderModifyMessage)
                     {
                         seq = SequenceGenerator.Next();
-                        _store.Add(seq, messageBytes);
+                        _store.Add(seq, deserialized);
                     }
 
                     var header = new MessageHeader { SequenceNumber = seq, ReceivedAt = DateTime.UtcNow };
@@ -130,26 +131,7 @@ public static class MarketDataWebSocket
                             break;
                         case ResendRequestMessage rr:
                             // Determine begin and end
-                            var begin = rr.BeginSeqNo ?? 1;
-                            var end = rr.EndSeqNo.HasValue && rr.EndSeqNo.Value > 0 ? rr.EndSeqNo.Value : SequenceGenerator.Current;
-                            Console.WriteLine($"Resend request for range {begin}..{end}");
-                            var toResend = _store.GetRange(begin, end);
-                            foreach (var stored in toResend)
-                            {
-                                try
-                                {
-                                    // Prefix with sequence for clarity: SEQ=<seq>|<original message>
-                                    var payload = Encoding.ASCII.GetString(stored.RawMessage);
-                                    var outMsg = $"SEQ={stored.SequenceNumber}|{payload}";
-                                    var outBytes = Encoding.ASCII.GetBytes(outMsg);
-                                    await socket.SendAsync(new ArraySegment<byte>(outBytes), WebSocketMessageType.Text, true, linked);
-                                    Console.WriteLine($"Resent seq={stored.SequenceNumber}");
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine($"Failed to resend seq={stored.SequenceNumber}: {ex.Message}");
-                                }
-                            }
+                            ResendMessage(rr, socket, linked);
                             break;
                         default:
                             Console.WriteLine($"[{envelope.Header.SequenceNumber}] Unknown or unsupported FIX message");
@@ -224,6 +206,55 @@ public static class MarketDataWebSocket
             {
                 Console.WriteLine($"Inactivity monitor error: {ex.Message}");
                 break;
+            }
+        }
+    }
+
+    public static async void ResendMessage(ResendRequestMessage rr, WebSocket socket, CancellationToken linked)
+    {
+        var begin = rr.BeginSeqNo ?? 1;
+        var end = rr.EndSeqNo.HasValue && rr.EndSeqNo.Value > 0 ? rr.EndSeqNo.Value : SequenceGenerator.Current;
+        Console.WriteLine($"Resend request for range {begin}..{end}");
+        var toResend = _store.GetRange(begin, end);
+        foreach (var stored in toResend)
+        {
+            try
+            {
+                string payloadStr;
+                // Try to extract Fields dictionary from payload
+                if (stored.Payload is MarketData.Domain.FixMessage fm)
+                {
+                    payloadStr = string.Join('|', fm.Fields.Select(kv => $"{kv.Key}={kv.Value}")) + "|";
+                }
+                else
+                {
+                    var prop = stored.Payload.GetType().GetProperty("Fields");
+                    if (prop != null)
+                    {
+                        var val = prop.GetValue(stored.Payload) as System.Collections.Generic.IDictionary<string, string>;
+                        if (val != null)
+                        {
+                            payloadStr = string.Join('|', val.Select(kv => $"{kv.Key}={kv.Value}")) + "|";
+                        }
+                        else
+                        {
+                            payloadStr = stored.Payload.ToString() ?? string.Empty;
+                        }
+                    }
+                    else
+                    {
+                        payloadStr = stored.Payload.ToString() ?? string.Empty;
+                    }
+                }
+
+                var outMsg = $"SEQ={stored.SequenceNumber}|{payloadStr}";
+                var outBytes = Encoding.ASCII.GetBytes(outMsg);
+                await socket.SendAsync(new ArraySegment<byte>(outBytes), WebSocketMessageType.Text, true, linked);
+                Console.WriteLine($"Resent seq={stored.SequenceNumber}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to resend seq={stored.SequenceNumber}: {ex.Message}");
             }
         }
     }

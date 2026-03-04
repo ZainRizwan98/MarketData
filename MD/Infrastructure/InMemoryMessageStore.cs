@@ -5,15 +5,15 @@ using System.Linq;
 
 namespace MarketData.Infrastructure;
 
-public record StoredMessage(long SequenceNumber, byte[] RawMessage, DateTime ReceivedAt);
+public record StoredMessage(long SequenceNumber, object Payload, DateTime ReceivedAt);
 
 public class InMemoryMessageStore
 {
     private readonly ConcurrentDictionary<long, StoredMessage> _store = new();
 
-    public void Add(long seq, byte[] raw)
+    public void Add(long seq, object payload)
     {
-        var msg = new StoredMessage(seq, raw, DateTime.UtcNow);
+        var msg = new StoredMessage(seq, payload, DateTime.UtcNow);
         _store[seq] = msg;
     }
 

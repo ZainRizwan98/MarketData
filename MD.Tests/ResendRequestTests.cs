@@ -16,13 +16,14 @@ namespace MarketData.Tests
             // reset global sequence generator
             SequenceGenerator.Set(0);
 
-            // send/store 15 order messages
+            // send/store 15 order messages (deserialize and store objects)
             for (int i = 1; i <= 15; i++)
             {
                 var msg = $"35=D|11=CL{i}|55=SYM|38={i * 10}|44=100.0|10=000|";
                 var bytes = Encoding.ASCII.GetBytes(msg);
+                var obj = MarketData.Parsing.FixParser.ParseAndDeserialize(bytes);
                 var seq = SequenceGenerator.Next();
-                store.Add(seq, bytes);
+                store.Add(seq, obj!);
             }
 
             // act: request resend for 3..12
@@ -39,9 +40,23 @@ namespace MarketData.Tests
                 var expectedSeq = begin + i;
                 Assert.Equal(expectedSeq, list[i].SequenceNumber);
 
-                // verify payload decodes to expected ClOrdID
-                var payload = Encoding.ASCII.GetString(list[i].RawMessage);
-                Assert.Contains($"11=CL{expectedSeq}|", payload);
+                // verify payload object contains expected ClOrdID
+                var payloadObj = list[i].Payload;
+                Assert.NotNull(payloadObj);
+                // most likely OrderInsertMessage
+                if (payloadObj is MarketData.Domain.OrderInsertMessage oi)
+                {
+                    Assert.Equal($"CL{expectedSeq}", oi.ClOrdID);
+                }
+                else
+                {
+                    // fallback: try to read Fields property
+                    var prop = payloadObj.GetType().GetProperty("Fields");
+                    Assert.NotNull(prop);
+                    var dict = prop.GetValue(payloadObj) as System.Collections.Generic.IDictionary<string, string>;
+                    Assert.NotNull(dict);
+                    Assert.Equal($"CL{expectedSeq}", dict["11"]);
+                }
             }
         }
     }
